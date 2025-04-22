@@ -9,7 +9,10 @@ class TRTAttachPag:
         return {
             "required": {
                 "model": ("MODEL",),
-                "unet_block": (["input", "middle", "output"], {"default": "middle"}),
+                "unet_block": (
+                    ["input", "middle", "output", "middle+output"],
+                    {"default": "middle"},
+                ),
                 "unet_block_id": ("INT", {"default": 0}),
             },
             "optional": {
@@ -33,6 +36,9 @@ class TRTAttachPag:
 
         if unet_block_list:
             blocks = parse_unet_blocks(model, unet_block_list)
+        elif unet_block == "middle+output":
+            # Apply to both middle and output blocks with the same ID
+            blocks = [("middle", unet_block_id, None), ("output", unet_block_id, None)]
         else:
             blocks = [(unet_block, unet_block_id, None)]
 
@@ -51,11 +57,50 @@ class TRTPerturbedAttention:
             "required": {
                 "model_base": ("MODEL",),
                 "model_pag": ("MODEL",),
-                "scale": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 100.0, "step": 0.1, "round": 0.01}),
-                "adaptive_scale": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001, "round": 0.0001}),
-                "sigma_start": ("FLOAT", {"default": -1.0, "min": -1.0, "max": 10000.0, "step": 0.01, "round": False}),
-                "sigma_end": ("FLOAT", {"default": -1.0, "min": -1.0, "max": 10000.0, "step": 0.01, "round": False}),
-                "rescale": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "scale": (
+                    "FLOAT",
+                    {
+                        "default": 3.0,
+                        "min": 0.0,
+                        "max": 100.0,
+                        "step": 0.1,
+                        "round": 0.01,
+                    },
+                ),
+                "adaptive_scale": (
+                    "FLOAT",
+                    {
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.001,
+                        "round": 0.0001,
+                    },
+                ),
+                "sigma_start": (
+                    "FLOAT",
+                    {
+                        "default": -1.0,
+                        "min": -1.0,
+                        "max": 10000.0,
+                        "step": 0.01,
+                        "round": False,
+                    },
+                ),
+                "sigma_end": (
+                    "FLOAT",
+                    {
+                        "default": -1.0,
+                        "min": -1.0,
+                        "max": 10000.0,
+                        "step": 0.01,
+                        "round": False,
+                    },
+                ),
+                "rescale": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
                 "rescale_mode": (["full", "partial"], {"default": "full"}),
             },
         }
@@ -99,11 +144,15 @@ class TRTPerturbedAttention:
             if signal_scale == 0 or not (sigma_end < sigma[0] <= sigma_start):
                 return cfg_result
 
-            (pag_cond_pred,) = calc_cond_batch(model_pag.model, [cond], x, sigma, model_pag.model_options)
+            (pag_cond_pred,) = calc_cond_batch(
+                model_pag.model, [cond], x, sigma, model_pag.model_options
+            )
 
             pag = (cond_pred - pag_cond_pred) * signal_scale
 
-            return cfg_result + rescale_guidance(pag, cond_pred, cfg_result, rescale, rescale_mode)
+            return cfg_result + rescale_guidance(
+                pag, cond_pred, cfg_result, rescale, rescale_mode
+            )
 
         m.set_model_sampler_post_cfg_function(post_cfg_function)
 
