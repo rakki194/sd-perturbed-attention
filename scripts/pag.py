@@ -85,7 +85,7 @@ try:
                         )
                     with gr.Row():
                         block = gr.Dropdown(
-                            choices=["input", "middle", "output", "middle+output"],
+                            choices=["input", "middle", "output"],
                             value="middle",
                             label="U-Net Block",
                         )

@@ -9,10 +9,7 @@ class TRTAttachPag:
         return {
             "required": {
                 "model": ("MODEL",),
-                "unet_block": (
-                    ["input", "middle", "output", "middle+output"],
-                    {"default": "middle"},
-                ),
+                "unet_block": (["input", "middle", "output"], {"default": "middle"}),
                 "unet_block_id": ("INT", {"default": 0}),
             },
             "optional": {
@@ -36,9 +33,6 @@ class TRTAttachPag:
 
         if unet_block_list:
             blocks = parse_unet_blocks(model, unet_block_list)
-        elif unet_block == "middle+output":
-            # Apply to both middle and output blocks with the same ID
-            blocks = [("middle", unet_block_id, None), ("output", unet_block_id, None)]
         else:
             blocks = [(unet_block, unet_block_id, None)]
 

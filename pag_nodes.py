@@ -73,10 +73,7 @@ class PerturbedAttention:
                         "round": 0.0001,
                     },
                 ),
-                "unet_block": (
-                    ["input", "middle", "output", "middle+output"],
-                    {"default": "middle"},
-                ),
+                "unet_block": (["input", "middle", "output"], {"default": "middle"}),
                 "unet_block_id": ("INT", {"default": 0}),
                 "sigma_start": (
                     "FLOAT",
@@ -132,9 +129,6 @@ class PerturbedAttention:
         sigma_start = float("inf") if sigma_start < 0 else sigma_start
         if unet_block_list:
             blocks = parse_unet_blocks(model, unet_block_list)
-        elif unet_block == "middle+output":
-            # Apply to both middle and output blocks with the same ID
-            blocks = [("middle", unet_block_id, None), ("output", unet_block_id, None)]
         else:
             blocks = [(unet_block, unet_block_id, None)]
 
@@ -196,6 +190,285 @@ class PerturbedAttention:
         return (m,)
 
 
+class MultiBlockPerturbedAttention:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "middle_scale": (
+                    "FLOAT",
+                    {
+                        "default": 3.0,
+                        "min": 0.0,
+                        "max": 100.0,
+                        "step": 0.1,
+                        "round": 0.01,
+                    },
+                ),
+                "output_scale": (
+                    "FLOAT",
+                    {
+                        "default": 3.0,
+                        "min": 0.0,
+                        "max": 100.0,
+                        "step": 0.1,
+                        "round": 0.01,
+                    },
+                ),
+                "output_cfg_weight": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 2.0,
+                        "step": 0.01,
+                        "round": 0.01,
+                    },
+                ),
+                "adaptive_scale": (
+                    "FLOAT",
+                    {
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.001,
+                        "round": 0.0001,
+                    },
+                ),
+                "middle_block_id": ("INT", {"default": 0}),
+                "output_block_id": ("INT", {"default": 0}),
+                "middle_sigma_start": (
+                    "FLOAT",
+                    {
+                        "default": -1.0,
+                        "min": -1.0,
+                        "max": 10000.0,
+                        "step": 0.01,
+                        "round": False,
+                    },
+                ),
+                "middle_sigma_end": (
+                    "FLOAT",
+                    {
+                        "default": -1.0,
+                        "min": -1.0,
+                        "max": 10000.0,
+                        "step": 0.01,
+                        "round": False,
+                    },
+                ),
+                "output_sigma_start": (
+                    "FLOAT",
+                    {
+                        "default": -1.0,
+                        "min": -1.0,
+                        "max": 10000.0,
+                        "step": 0.01,
+                        "round": False,
+                    },
+                ),
+                "output_sigma_end": (
+                    "FLOAT",
+                    {
+                        "default": -1.0,
+                        "min": -1.0,
+                        "max": 10000.0,
+                        "step": 0.01,
+                        "round": False,
+                    },
+                ),
+                "rescale": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "rescale_mode": (["full", "partial", "snf"], {"default": "full"}),
+            },
+            "optional": {
+                "middle_block_list": ("STRING", {"default": ""}),
+                "output_block_list": ("STRING", {"default": ""}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    FUNCTION = "patch"
+
+    CATEGORY = "model_patches/unet"
+
+    def patch(
+        self,
+        model: ModelPatcher,
+        middle_scale: float = 3.0,
+        output_scale: float = 3.0,
+        output_cfg_weight: float = 1.0,
+        adaptive_scale: float = 0.0,
+        middle_block_id: int = 0,
+        output_block_id: int = 0,
+        middle_sigma_start: float = -1.0,
+        middle_sigma_end: float = -1.0,
+        output_sigma_start: float = -1.0,
+        output_sigma_end: float = -1.0,
+        rescale: float = 0.0,
+        rescale_mode: str = "full",
+        middle_block_list: str = "",
+        output_block_list: str = "",
+    ):
+        m = model.clone()
+
+        middle_sigma_start = (
+            float("inf") if middle_sigma_start < 0 else middle_sigma_start
+        )
+        output_sigma_start = (
+            float("inf") if output_sigma_start < 0 else output_sigma_start
+        )
+
+        # Parse middle blocks
+        if middle_block_list:
+            middle_blocks = parse_unet_blocks(model, middle_block_list)
+        else:
+            middle_blocks = [("middle", middle_block_id, None)]
+
+        # Parse output blocks
+        if output_block_list:
+            output_blocks = parse_unet_blocks(model, output_block_list)
+        else:
+            output_blocks = [("output", output_block_id, None)]
+
+        def post_cfg_function(args):
+            """CFG+PAG with separate middle and output blocks"""
+            model = args["model"]
+            cond_pred = args["cond_denoised"]
+            uncond_pred = args["uncond_denoised"]
+            cond = args["cond"]
+            cfg_result = args["denoised"]
+            sigma = args["sigma"]
+            model_options = args["model_options"].copy()
+            x = args["input"]
+
+            # Calculate adaptive scale if enabled
+            current_middle_scale = middle_scale
+            current_output_scale = output_scale
+
+            if adaptive_scale > 0:
+                t = 0
+                if hasattr(model, "model_sampling"):
+                    t = model.model_sampling.timestep(sigma)[0].item()
+                else:
+                    ts = model.predictor.timestep(sigma)
+                    t = ts[0].item()
+
+                middle_adjustment = middle_scale * (adaptive_scale**4) * (1000 - t)
+                output_adjustment = output_scale * (adaptive_scale**4) * (1000 - t)
+                current_middle_scale -= middle_adjustment
+                current_output_scale -= output_adjustment
+
+                if current_middle_scale < 0:
+                    current_middle_scale = 0
+                if current_output_scale < 0:
+                    current_output_scale = 0
+
+            final_result = cfg_result
+
+            # Process middle blocks
+            if current_middle_scale > 0 and (
+                middle_sigma_end < sigma[0] <= middle_sigma_start
+            ):
+                # Replace Self-attention with PAG for middle blocks
+                middle_model_options = model_options.copy()
+                for block in middle_blocks:
+                    layer, number, index = block
+                    middle_model_options = set_model_options_patch_replace(
+                        middle_model_options,
+                        perturbed_attention,
+                        "attn1",
+                        layer,
+                        number,
+                        index,
+                    )
+
+                if BACKEND == "ComfyUI":
+                    (pag_middle_cond_pred,) = calc_cond_batch(
+                        model, [cond], x, sigma, middle_model_options
+                    )
+                if BACKEND in {"Forge", "reForge"}:
+                    (pag_middle_cond_pred, _) = calc_cond_uncond_batch(
+                        model, cond, None, x, sigma, middle_model_options
+                    )
+
+                middle_pag = (cond_pred - pag_middle_cond_pred) * current_middle_scale
+
+                if rescale_mode == "snf":
+                    if uncond_pred.any():
+                        final_result = uncond_pred + snf_guidance(
+                            cfg_result - uncond_pred, middle_pag
+                        )
+                    else:
+                        final_result = cfg_result + middle_pag
+                else:
+                    final_result = cfg_result + rescale_guidance(
+                        middle_pag, cond_pred, cfg_result, rescale, rescale_mode
+                    )
+
+            # Process output blocks
+            if current_output_scale > 0 and (
+                output_sigma_end < sigma[0] <= output_sigma_start
+            ):
+                # Replace Self-attention with PAG for output blocks
+                output_model_options = model_options.copy()
+                for block in output_blocks:
+                    layer, number, index = block
+                    output_model_options = set_model_options_patch_replace(
+                        output_model_options,
+                        perturbed_attention,
+                        "attn1",
+                        layer,
+                        number,
+                        index,
+                    )
+
+                if BACKEND == "ComfyUI":
+                    (pag_output_cond_pred,) = calc_cond_batch(
+                        model, [cond], x, sigma, output_model_options
+                    )
+                if BACKEND in {"Forge", "reForge"}:
+                    (pag_output_cond_pred, _) = calc_cond_uncond_batch(
+                        model, cond, None, x, sigma, output_model_options
+                    )
+
+                output_pag = (cond_pred - pag_output_cond_pred) * current_output_scale
+
+                # Apply CFG weight to output blocks guidance
+                if output_cfg_weight != 1.0 and uncond_pred.any():
+                    # Extract the CFG component (cond - uncond)
+                    cfg_component = cond_pred - uncond_pred
+                    # Scale the CFG component
+                    adjusted_cfg_component = cfg_component * output_cfg_weight
+                    # Recalculate guidance with adjusted CFG
+                    output_pag = (
+                        cond_pred
+                        - pag_output_cond_pred
+                        + (adjusted_cfg_component - cfg_component)
+                    ) * current_output_scale
+
+                if rescale_mode == "snf":
+                    if uncond_pred.any():
+                        final_result = uncond_pred + snf_guidance(
+                            final_result - uncond_pred, output_pag
+                        )
+                    else:
+                        final_result = final_result + output_pag
+                else:
+                    final_result = final_result + rescale_guidance(
+                        output_pag, cond_pred, final_result, rescale, rescale_mode
+                    )
+
+            return final_result
+
+        m.set_model_sampler_post_cfg_function(post_cfg_function, rescale_mode == "snf")
+
+        return (m,)
+
+
 class SmoothedEnergyGuidanceAdvanced:
     @classmethod
     def INPUT_TYPES(s):
@@ -222,10 +495,7 @@ class SmoothedEnergyGuidanceAdvanced:
                         "round": 0.001,
                     },
                 ),
-                "unet_block": (
-                    ["input", "middle", "output", "middle+output"],
-                    {"default": "middle"},
-                ),
+                "unet_block": (["input", "middle", "output"], {"default": "middle"}),
                 "unet_block_id": ("INT", {"default": 0}),
                 "sigma_start": (
                     "FLOAT",
@@ -281,9 +551,6 @@ class SmoothedEnergyGuidanceAdvanced:
         sigma_start = float("inf") if sigma_start < 0 else sigma_start
         if unet_block_list:
             blocks = parse_unet_blocks(model, unet_block_list)
-        elif unet_block == "middle+output":
-            # Apply to both middle and output blocks with the same ID
-            blocks = [("middle", unet_block_id, None), ("output", unet_block_id, None)]
         else:
             blocks = [(unet_block, unet_block_id, None)]
 

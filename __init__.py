@@ -1,8 +1,14 @@
-from .pag_nodes import PerturbedAttention, SmoothedEnergyGuidanceAdvanced, SlidingWindowGuidanceAdvanced
+from .pag_nodes import (
+    PerturbedAttention,
+    MultiBlockPerturbedAttention,
+    SmoothedEnergyGuidanceAdvanced,
+    SlidingWindowGuidanceAdvanced,
+)
 from .pag_trt_nodes import TRTAttachPag, TRTPerturbedAttention
 
 NODE_CLASS_MAPPINGS = {
     "PerturbedAttention": PerturbedAttention,
+    "MultiBlockPerturbedAttention": MultiBlockPerturbedAttention,
     "SmoothedEnergyGuidanceAdvanced": SmoothedEnergyGuidanceAdvanced,
     "SlidingWindowGuidanceAdvanced": SlidingWindowGuidanceAdvanced,
     "TRTAttachPag": TRTAttachPag,
@@ -10,7 +16,8 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PerturbedAttention": "Perturbed-Attention Guidance (Advanced)",
+    "PerturbedAttention": "The Perturbinator",
+    "MultiBlockPerturbedAttention": "Multi-Block Perturbinator",
     "SmoothedEnergyGuidanceAdvanced": "Smoothed Energy Guidance (Advanced)",
     "SlidingWindowGuidanceAdvanced": "Sliding Window Guidance (Advanced)",
     "TRTAttachPag": "TensorRT Attach PAG",
