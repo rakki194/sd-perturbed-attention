@@ -349,6 +349,8 @@ class MultiBlockPerturbedAttention:
             current_middle_scale = middle_scale
             current_output_scale = output_scale
 
+            print(f"Current sigma: {sigma[0]}")
+
             if adaptive_scale > 0:
                 t = 0
                 if hasattr(model, "model_sampling"):
@@ -374,6 +376,9 @@ class MultiBlockPerturbedAttention:
                 middle_sigma_end < sigma[0] <= middle_sigma_start
             ):
                 # Replace Self-attention with PAG for middle blocks
+                print(
+                    f"Applying middle PAG, sigma: {sigma[0]}, range: ({middle_sigma_end}, {middle_sigma_start}]"
+                )
                 middle_model_options = model_options.copy()
                 for block in middle_blocks:
                     layer, number, index = block
@@ -414,6 +419,9 @@ class MultiBlockPerturbedAttention:
                 output_sigma_end < sigma[0] <= output_sigma_start
             ):
                 # Replace Self-attention with PAG for output blocks
+                print(
+                    f"Applying output PAG, sigma: {sigma[0]}, range: ({output_sigma_end}, {output_sigma_start}]"
+                )
                 output_model_options = model_options.copy()
                 for block in output_blocks:
                     layer, number, index = block
