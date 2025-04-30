@@ -475,9 +475,6 @@ class MultiBlockPerturbedAttentionGROWL:
     def INPUT_TYPES(s):
         # Start with existing MBPA inputs
         types = MultiBlockPerturbedAttention.INPUT_TYPES()
-        # Remove adaptive_scale if it exists in the base class inputs
-        if "adaptive_scale" in types["required"]:
-            del types["required"]["adaptive_scale"]
         # Add GROWL specific inputs
         types["required"].update(
             {
@@ -514,11 +511,11 @@ class MultiBlockPerturbedAttentionGROWL:
     def patch(
         self,
         model: ModelPatcher,
-        # Include all original MBPA params EXCEPT adaptive_scale
+        # Include all original MBPA params
         middle_scale: float = 3.0,
         output_scale: float = 3.0,
         output_cfg_weight: float = 1.0,
-        # adaptive_scale removed
+        adaptive_scale: float = 0.0,
         middle_block_id: int = 0,
         output_block_id: int = 0,
         middle_sigma_start: float = -1.0,
@@ -605,7 +602,17 @@ class MultiBlockPerturbedAttentionGROWL:
 
             # --- Middle Block Processing (using adapted_middle_scale) ---
             signal_middle_scale = adapted_middle_scale  # Use adapted scale
-            # adaptive_scale logic removed
+            if adaptive_scale > 0:  # Keep original adaptive logic if needed
+                t = 0
+                if hasattr(model, "model_sampling"):
+                    t = model.model_sampling.timestep(sigma)[0].item()
+                else:
+                    ts = model.predictor.timestep(sigma)
+                    t = ts[0].item()
+                adapt_scale_reduction = (adaptive_scale**4) * (1000 - t)
+                signal_middle_scale -= adapted_middle_scale * adapt_scale_reduction
+                if signal_middle_scale < 0:
+                    signal_middle_scale = 0
 
             if signal_middle_scale > 0 and (
                 middle_sigma_end < sigma[0] <= middle_sigma_start
@@ -649,7 +656,18 @@ class MultiBlockPerturbedAttentionGROWL:
 
             # --- Output Block Processing (using adapted_output_scale) ---
             signal_output_scale = adapted_output_scale  # Use adapted scale
-            # adaptive_scale logic removed
+            if adaptive_scale > 0:  # Apply adaptive logic here too
+                # Recalculate reduction if needed (or reuse if t is the same)
+                t = 0
+                if hasattr(model, "model_sampling"):
+                    t = model.model_sampling.timestep(sigma)[0].item()
+                else:
+                    ts = model.predictor.timestep(sigma)
+                    t = ts[0].item()
+                adapt_scale_reduction = (adaptive_scale**4) * (1000 - t)
+                signal_output_scale -= adapted_output_scale * adapt_scale_reduction
+                if signal_output_scale < 0:
+                    signal_output_scale = 0
 
             if signal_output_scale > 0 and (
                 output_sigma_end < sigma[0] <= output_sigma_start
